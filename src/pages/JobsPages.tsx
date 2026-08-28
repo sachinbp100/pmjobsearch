@@ -25,7 +25,18 @@ export function Discover() {
   const [src, setSrc] = useState("All sources");
   const [minScore, setMinScore] = useState(0);
   const [fresh, setFresh] = useState(0);
+  const [locF, setLocF] = useState<"any" | "country" | "remote">("any");
   const [sort, setSort] = useState<"score" | "newest" | "salary">("newest");
+  const country = state.profile.country || "India";
+  const countryCities: Record<string, string[]> = {
+    india: ["bengaluru", "bangalore", "hyderabad", "pune", "mumbai", "chennai", "gurugram", "gurgaon", "noida", "kolkata"],
+  };
+  const locOk = (j: Job): boolean => {
+    if (locF === "any") return true;
+    if (locF === "remote") return j.mode === "Remote";
+    const l = j.location.toLowerCase();
+    return j.mode === "Remote" || l.includes(country.toLowerCase()) || (countryCities[country.toLowerCase()] ?? []).some((c) => l.includes(c));
+  };
   const [captureOpen, setCaptureOpen] = useState(false);
   const [paste, setPaste] = useState("");
   const capAI = useFakeAI();
@@ -69,6 +80,7 @@ export function Discover() {
       (!live || job.live) &&
       (mode === "All" || job.mode === mode) &&
       (src === "All sources" || job.source === src) &&
+      locOk(job) &&
       score.overall >= minScore &&
       (fresh === 0 || job.postedDaysAgo <= fresh) &&
       (q === "" || (job.title + " " + job.company + " " + job.industry + " " + job.requiredSkills.join(" ")).toLowerCase().includes(q.toLowerCase()))
@@ -79,7 +91,7 @@ export function Discover() {
       : a.job.postedDaysAgo - b.job.postedDaysAgo
     );
     return out;
-  }, [scored, q, mode, src, minScore, fresh, sort, live]);
+  }, [scored, q, mode, src, minScore, fresh, sort, live, locF, country]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const analyzeCaptured = () => {
     if (paste.trim().length < 40) { toast("Paste a fuller job description (40+ characters)", "warn"); return; }
@@ -129,11 +141,18 @@ export function Discover() {
             <button onClick={() => setLive(true)}
               className={`flex items-center gap-1.5 border-l border-mist-300 px-3 py-1.5 text-xs font-semibold transition-colors ${live ? "bg-pine-600 text-white" : "bg-white text-mist-600 hover:bg-mist-50"}`}>
               <span className={`h-1.5 w-1.5 rounded-full ${live ? "pulse-dot bg-gold-400" : "bg-mist-400"}`} />
-              Live feed
+            Live feed
+          </button>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {([["any", "Anywhere"], ["country", country], ["remote", "Remote only"]] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setLocF(id)}
+              className={`chip border transition-colors ${locF === id ? "border-ink-900 bg-ink-900 text-white" : "bg-white hover:border-ink-300"}`}>
+              {id === "country" && <Icon name="building" size={11} />}{label}
             </button>
-          </div>
-          {["Posted:", ["Any", 0], ["24h", 1], ["3d", 3], ["7d", 7]].map(([label, v], i) =>
-            i === 0 ? <span key="l" className="label-mono">{label as string}</span> : (
+          ))}
+        </div>
+        {["Posted:", ["Any", 0], ["24h", 1], ["3d", 3], ["7d", 7]].map(([label, v], i) =>            i === 0 ? <span key="l" className="label-mono">{label as string}</span> : (
               <button key={label as string} onClick={() => setFresh(v as number)}
                 className={`chip border ${fresh === v ? "border-pine-600 bg-pine-600 text-white" : "bg-white"}`}>{label as string}</button>
             )
@@ -165,6 +184,9 @@ export function Discover() {
               className="btn btn-ghost !px-2 !py-1 text-xs" aria-label="Sync live feeds now">
               <Icon name="refresh" size={13} />Sync now
             </button>
+            <span className="w-full text-[11px] leading-relaxed text-mist-400">
+              Remotive lists remote-first roles worldwide (India-friendly) · Arbeitnow leans EU-based · your base country is set in Career Profile → Search preferences
+            </span>
           </div>
         )}
       </div>

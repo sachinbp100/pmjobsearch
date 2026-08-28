@@ -1,7 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Profile, WorkMode } from "../data";
 import { fmtDate } from "../data";
 import { scoreJob } from "../engine";
+import {
+  ACCEPTED_RESUME_EXT, MAX_RESUME_MB, deleteResumeFile, getResumeFile, readAsDataUrl, readAsText,
+  scanResumeText, storeResumeFile,
+} from "../files";
 import { useApp } from "../store";
 import { Btn, Chip, EmptyState, Icon, Modal, Monogram, SectionHead, Toggle } from "../ui";
 
@@ -72,7 +76,16 @@ export function CareerProfile() {
         {/* preferences */}
         <section className="card h-fit p-5">
           <h3 className="flex items-center gap-2 font-display text-base font-semibold text-ink-900"><span className="text-pine-600"><Icon name="target" size={16} /></span>Search preferences</h3>
-          <p className="label-mono mb-1.5 mt-3.5">Preferred titles</p>
+          <p className="label-mono mb-1.5 mt-3.5">Country / base — feeds match scoring & the Discover filter</p>
+          <div className="flex gap-1.5">
+            <input className="input !py-1.5 text-xs" list="wp-countries" defaultValue={p.country}
+              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== p.country) { set({ country: v }); toast(`Base country set to ${v} — scores re-ranked`); } }}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} aria-label="Country" />
+            <datalist id="wp-countries">
+              {["India", "United States", "United Kingdom", "Singapore", "United Arab Emirates", "Canada", "Australia", "Germany", "Netherlands", "Remote-first (anywhere)"].map((c) => <option key={c} value={c} />)}
+            </datalist>
+          </div>
+          <p className="label-mono mb-1.5 mt-4">Preferred titles</p>
           <div className="flex flex-wrap gap-1.5">
             {p.preferredTitles.map((t) => (
               <span key={t} className="chip border border-pine-200 bg-pine-50 text-pine-700">{t}
@@ -106,6 +119,8 @@ export function CareerProfile() {
           <div className="flex flex-wrap gap-1.5">{p.preferredCompanies.map((c) => <Chip key={c} tone="gold">{c}</Chip>)}</div>
         </section>
       </div>
+
+      <ResumeUploadCard />
 
       {/* skills */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -176,6 +191,180 @@ export function CareerProfile() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── RESUME UPLOAD ───────────────────────────────────────────────────────────
+function ResumeUploadCard() {
+  const { state, addResumeVersion, updateResumeVersion, removeResumeVersion, updateProfile, toast } = useApp();
+  const p = state.profile;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [viewText, setViewText] = useState<string | null>(null);
+  const [scan, setScan] = useState<{ skills: string[]; metricLines: string[]; picked: string[] } | null>(null);
+
+  const handleFiles = async (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f) return;
+    const ext = (f.name.split(".").pop() ?? "").toLowerCase();
+    if (!ACCEPTED_RESUME_EXT.includes(ext)) { toast("Unsupported type — use PDF, DOC, DOCX, TXT or MD", "err"); return; }
+    if (f.size > MAX_RESUME_MB * 1024 * 1024) { toast(`That file is over ${MAX_RESUME_MB} MB — trim it and retry`, "err"); return; }
+    setBusy(true);
+    try {
+      const dataUrl = await readAsDataUrl(f);
+      const id = `rv-${Date.now().toString(36)}`;
+      if (!storeResumeFile(id, dataUrl)) { toast("Browser storage is full — remove an older resume file first", "err"); setBusy(false); return; }
+      let textExtract: string | undefined;
+      if (ext === "txt" || ext === "md") {
+        const text = await readAsText(f);
+        textExtract = text.slice(0, 12000);
+        const s = scanResumeText(text);
+        const fresh = s.skills.filter((x) => !p.skillAreas.some((a) => a.area === x));
+        if (fresh.length > 0 || s.metricLines.length > 0) setScan({ skills: fresh, metricLines: s.metricLines, picked: fresh });
+      }
+      addResumeVersion(
+        `${f.name.replace(/\.[^.]+$/, "")} · ${ext.toUpperCase()}`,
+        `Uploaded resume · ${(f.size / 1024).toFixed(0)} KB · stored locally in this browser`,
+        undefined,
+        { id, fileName: f.name, fileSize: f.size, fileKind: ext, textExtract, primary: state.resumeVersions.length === 0 }
+      );
+      toast(`Resume attached — ${f.name}`);
+    } catch {
+      toast("Could not read that file", "err");
+    }
+    setBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const download = (id: string, name: string) => {
+    const url = getResumeFile(id);
+    if (!url) { toast("File is no longer in browser storage", "warn"); return; }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  };
+
+  const versions = state.resumeVersions;
+
+  return (
+    <section className="card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 font-display text-base font-semibold text-ink-900">
+          <span className="text-pine-600"><Icon name="doc" size={17} /></span>Resumes & CV
+        </h3>
+        <span className="font-mono text-xs text-mist-400">{versions.length} version{versions.length === 1 ? "" : "s"} · files never leave this browser</span>
+      </div>
+
+      <div className="mt-3 grid gap-4 lg:grid-cols-[300px_1fr]">
+        {/* dropzone */}
+        <button
+          onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); void handleFiles(e.dataTransfer.files); }}
+          className={`flex min-h-[168px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-5 text-center transition-all ${dragOver ? "border-pine-500 bg-pine-50 scale-[1.01]" : "border-mist-300 bg-mist-50 hover:border-pine-400 hover:bg-pine-50/40"}`}
+          aria-label="Upload resume">
+          {busy ? (
+            <>
+              <span className="h-7 w-7 animate-spin rounded-full border-2 border-mist-300 border-t-pine-600" />
+              <p className="text-sm font-medium text-ink-700">Storing resume…</p>
+            </>
+          ) : (
+            <>
+              <span className={`transition-transform ${dragOver ? "scale-110" : ""}`}><Icon name="up" size={26} /></span>
+              <p className="text-sm font-semibold text-ink-800">{dragOver ? "Drop to attach" : "Drop your resume here"}</p>
+              <p className="text-xs text-mist-500">or click to browse · PDF, DOC, DOCX, TXT, MD · max {MAX_RESUME_MB} MB</p>
+              <p className="mt-1 rounded-md border border-pine-200 bg-pine-50 px-2 py-1 text-[11px] leading-snug text-pine-800">
+                <b>.txt / .md</b> get scanned in-browser — detected skills can be added straight to your Verified Career Facts
+              </p>
+            </>
+          )}
+          <input ref={fileRef} type="file" accept={ACCEPTED_RESUME_EXT.map((e) => `.${e}`).join(",")} className="hidden"
+            onChange={(e) => void handleFiles(e.target.files)} />
+        </button>
+
+        {/* versions list */}
+        <div>
+          {versions.length === 0 ? (
+            <div className="flex h-full min-h-[168px] flex-col items-center justify-center rounded-xl border border-mist-200 bg-mist-50/50 p-5 text-center">
+              <p className="text-sm font-medium text-ink-700">No resume attached yet</p>
+              <p className="mt-1 max-w-sm text-xs leading-relaxed text-mist-500">Attach your master CV once — every tailored version Waypoint generates derives from it and stays traceable back to these verified facts.</p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {versions.map((v) => (
+                <li key={v.id} className={`flex flex-wrap items-center gap-2.5 rounded-lg border p-2.5 transition-colors ${v.primary ? "border-pine-300 bg-pine-50/50" : "border-mist-200"}`}>
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${v.primary ? "bg-pine-600 text-white" : "bg-mist-100 text-mist-600"}`}><Icon name="doc" size={16} /></span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-semibold text-ink-800">{v.name}
+                      {v.primary && <Chip tone="pine" className="ml-2 align-middle">primary</Chip>}
+                    </p>
+                    <p className="truncate text-[11px] text-mist-500">{v.note} · {fmtDate(v.updatedAt)}</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {v.fileName && <Btn size="sm" variant="ghost" icon="link" onClick={() => download(v.id!, v.fileName!)}>Save</Btn>}
+                    {v.textExtract && <Btn size="sm" variant="ghost" icon="eye" onClick={() => setViewText(v.textExtract!)}>Text</Btn>}
+                    {!v.primary && <Btn size="sm" variant="ghost" icon="star" onClick={() => { updateResumeVersion(v.id, { primary: true }); toast("Set as primary resume"); }}>Primary</Btn>}
+                    {confirmDel === v.id ? (
+                      <Btn size="sm" variant="danger" onClick={() => { removeResumeVersion(v.id); if (v.fileName) deleteResumeFile(v.id); setConfirmDel(null); toast("Resume removed", "warn"); }}>Confirm</Btn>
+                    ) : (
+                      <Btn size="sm" variant="ghost" icon="x" onClick={() => { setConfirmDel(v.id); window.setTimeout(() => setConfirmDel((c) => (c === v.id ? null : c)), 3000); }} aria-label="Remove" />
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* scan results */}
+      {scan && (
+        <div className="anim-fade-up mt-4 rounded-xl border border-pine-200 bg-pine-50/50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-pine-800"><Icon name="spark" size={15} />Resume scan — found in your upload</p>
+          {scan.skills.length > 0 && (
+            <>
+              <p className="label-mono mb-1.5 mt-2.5 !text-pine-700">Skills detected — tick the ones that are genuinely yours</p>
+              <div className="flex flex-wrap gap-1.5">
+                {scan.skills.map((s) => (
+                  <button key={s}
+                    onClick={() => setScan((sc) => sc && { ...sc, picked: sc.picked.includes(s) ? sc.picked.filter((x) => x !== s) : [...sc.picked, s] })}
+                    className={`chip border transition-colors ${scan.picked.includes(s) ? "border-pine-600 bg-pine-600 text-white" : "border-mist-300 bg-white text-ink-600"}`}>
+                    <Icon name={scan.picked.includes(s) ? "check" : "plus"} size={11} />{s}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {scan.metricLines.length > 0 && (
+            <>
+              <p className="label-mono mb-1.5 mt-3 !text-gold-600">Metric lines spotted — re-enter these as achievements with context (Waypoint never auto-adds claims)</p>
+              <ul className="space-y-1">
+                {scan.metricLines.map((m) => <li key={m} className="rounded-md border border-gold-100 bg-gold-50 px-2.5 py-1.5 font-mono text-[11px] leading-snug text-ink-700">{m}</li>)}
+              </ul>
+            </>
+          )}
+          <div className="mt-3 flex gap-2">
+            <Btn size="sm" variant="primary" icon="check" disabled={scan.picked.length === 0}
+              onClick={() => {
+                updateProfile({ skillAreas: [...p.skillAreas, ...scan.picked.map((s) => ({ area: s, level: "Working" as const, evidence: "Detected in uploaded resume — strengthen with specifics" }))] });
+                toast(`${scan.picked.length} skill${scan.picked.length === 1 ? "" : "s"} added to Verified Facts — scores re-ranked`);
+                setScan(null);
+              }}>
+              Add {scan.picked.length} to Verified Facts
+            </Btn>
+            <Btn size="sm" variant="ghost" onClick={() => setScan(null)}>Dismiss</Btn>
+          </div>
+        </div>
+      )}
+
+      <Modal open={!!viewText} onClose={() => setViewText(null)} title="Extracted resume text" wide>
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg border border-mist-200 bg-mist-50 p-4 font-mono text-xs leading-relaxed text-ink-700">{viewText}</pre>
+      </Modal>
+    </section>
   );
 }
 

@@ -80,6 +80,7 @@ export interface Profile {
   salaryMax: number;
   careerGoals: string;
   linkedin: string;
+  country: string; // base country — feeds location scoring & the Discover filter
 }
 
 export interface Recruiter { name: string; title: string; email: string; }
@@ -145,6 +146,11 @@ export interface ResumeVersion {
   note: string;
   approved: boolean;
   forJobId?: string;
+  fileName?: string;   // attached file metadata
+  fileSize?: number;   // bytes
+  fileKind?: string;   // extension, e.g. pdf
+  primary?: boolean;
+  textExtract?: string; // only for .txt/.md uploads
 }
 
 export interface TailoredResume {
@@ -395,7 +401,8 @@ const profile: Profile = {
   preferredTitles: ["Senior Product Manager", "Staff Product Manager", "Technical Product Manager", "Group Product Manager", "AI Product Manager", "Platform Product Manager", "Product Leader", "Principal Product Manager"],
   preferredIndustries: ["Enterprise SaaS", "Fintech", "AI Infrastructure", "Healthcare", "Developer Tools"],
   preferredCompanies: ["Ledgerline", "Cortexa", "Northbeam Analytics", "Meridian Labs", "Arclight Systems"],
-  preferredLocations: ["San Francisco Bay Area", "New York", "Seattle", "Remote — US"],
+  preferredLocations: ["Bengaluru", "Hyderabad", "Pune", "Remote — India"],
+  country: "India",
   workModes: ["Remote", "Hybrid"],
   salaryMin: 165000,
   salaryMax: 215000,

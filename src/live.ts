@@ -10,7 +10,7 @@ import { coverLetter } from "./engine";
 
 const PM_TITLE_RE = /\b(product (manager|owner|lead|director|vp)|head of product|technical product|tpm|gpm|group product|principal product|staff product|senior product|platform product|ai product)\b/i;
 
-const CANON: [string, RegExp][] = [
+export const CANON: [string, RegExp][] = [
   ["Product Strategy", /\b(product strategy|strategic roadmap|market strateg)/i],
   ["Product Discovery", /\b(product discovery|discovery process|customer discovery|user research)/i],
   ["Roadmapping", /\b(roadmap)/i],
