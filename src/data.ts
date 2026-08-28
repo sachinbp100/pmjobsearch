@@ -13,7 +13,9 @@ export type Source =
   | "Wellfound"
   | "Glassdoor"
   | "Referral"
-  | "Manual Capture";
+  | "Manual Capture"
+  | "Remotive"
+  | "Arbeitnow";
 
 export type AppStatus =
   | "Discovered"
@@ -103,6 +105,7 @@ export interface Job {
   recruiter?: Recruiter;
   link: string;
   isNew?: boolean;
+  live?: boolean; // fetched from a real internet source
 }
 
 export interface Note { at: string; text: string; }
@@ -228,6 +231,19 @@ export interface Integrations {
   browser: boolean;
 }
 
+export interface AIProvider {
+  kind: "local" | "openai" | "anthropic";
+  baseUrl: string; // e.g. https://api.openai.com/v1
+  apiKey: string;  // stays in this browser only
+  model: string;
+}
+export const DEFAULT_AI_PROVIDER: AIProvider = {
+  kind: "local",
+  baseUrl: "https://api.openai.com/v1",
+  apiKey: "",
+  model: "gpt-4o-mini",
+};
+
 export interface Settings {
   scheduleTime: string;
   scheduleFreq: "daily" | "weekdays" | "weekly";
@@ -236,6 +252,7 @@ export interface Settings {
   integrations: Integrations;
   autoAddHighMatch: boolean;
   minScoreToAlert: number;
+  aiProvider?: AIProvider;
 }
 
 export interface AppState {
@@ -254,6 +271,7 @@ export interface AppState {
   tailored: Record<string, TailoredResume>;
   agentLog: AgentLog[];
   settings: Settings;
+  lastLiveSync?: string | null; // ISO datetime of last successful live-board fetch
   // ui
   tab: string;
   jobDetailId: string | null;
@@ -1158,7 +1176,7 @@ const agentLog: AgentLog[] = [
 const settings: Settings = {
   scheduleTime: "07:30",
   scheduleFreq: "daily",
-  sources: { LinkedIn: true, "Company Careers": true, "Recruiter Email": true, Wellfound: true, Indeed: true, Glassdoor: false, Referral: true },
+  sources: { LinkedIn: true, "Company Careers": true, "Recruiter Email": true, Wellfound: true, Indeed: true, Glassdoor: false, Referral: true, Remotive: true, Arbeitnow: true },
   notifications: { highMatch: true, deadlines: true, followUps: true, weeklyDigest: false },
   integrations: { gmail: true, linkedin: true, calendar: false, browser: false },
   autoAddHighMatch: true,

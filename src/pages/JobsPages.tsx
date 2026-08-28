@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Job, WorkMode } from "../data";
 import { fmtMoney } from "../data";
 import { parsePastedJob, scoreJob } from "../engine";
 import type { JobScore } from "../engine";
+import { fetchLiveJobs } from "../live";
+import type { SourceStatus } from "../live";
 import { useApp } from "../store";
 import { Btn, Chip, EmptyState, Icon, JobCard, Modal, RecBadge, ScoreRing, SectionHead, Shimmer, Monogram, useFakeAI, scoreText } from "../ui";
 
@@ -16,7 +18,7 @@ function useScored() {
 
 // ─── DISCOVER ────────────────────────────────────────────────────────────────
 export function Discover() {
-  const { state, openJob, agentFinish, toast } = useApp();
+  const { state, openJob, agentFinish, toast, ingestLiveJobs } = useApp();
   const scored = useScored();
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"All" | WorkMode>("All");
@@ -28,10 +30,43 @@ export function Discover() {
   const [paste, setPaste] = useState("");
   const capAI = useFakeAI();
 
+  // ── live internet feed ──
+  const [live, setLive] = useState(false);
+  const [syncState, setSyncState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const [syncInfo, setSyncInfo] = useState<SourceStatus[] | null>(null);
+
+  const sync = useCallback(async () => {
+    const so = state.settings.sources;
+    if (so.Remotive === false && so.Arbeitnow === false) {
+      toast("Both live boards are disabled in Settings — enable Remotive or Arbeitnow first", "warn");
+      return;
+    }
+    setSyncState("busy");
+    try {
+      const { jobs, statuses } = await fetchLiveJobs({ remotive: so.Remotive !== false, arbeitnow: so.Arbeitnow !== false });
+      setSyncInfo(statuses);
+      if (jobs.length === 0 && statuses.every((s) => !s.ok)) { setSyncState("err"); return; }
+      const { added, dupes } = ingestLiveJobs(jobs);
+      setSyncState("ok");
+      toast(added > 0 ? `Live sync — ${added} new posting${added === 1 ? "" : "s"} added${dupes ? `, ${dupes} duplicate${dupes === 1 ? "" : "s"} skipped` : ""}` : "Live sync — already up to date", added > 0 ? "ok" : "warn");
+    } catch {
+      setSyncState("err");
+    }
+  }, [state.settings.sources, ingestLiveJobs, toast]);
+
+  // auto-sync when the live feed is opened (at most every 15 minutes)
+  useEffect(() => {
+    if (!live || syncState === "busy") return;
+    const stale = !state.lastLiveSync || Date.now() - new Date(state.lastLiveSync).getTime() > 15 * 60 * 1000;
+    if (stale) void sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
+
   const sources = ["All sources", ...new Set(state.jobs.map((j) => j.source))];
 
   const list = useMemo(() => {
     let out = scored.filter(({ job, score }) =>
+      (!live || job.live) &&
       (mode === "All" || job.mode === mode) &&
       (src === "All sources" || job.source === src) &&
       score.overall >= minScore &&
@@ -44,7 +79,7 @@ export function Discover() {
       : a.job.postedDaysAgo - b.job.postedDaysAgo
     );
     return out;
-  }, [scored, q, mode, src, minScore, fresh, sort]);
+  }, [scored, q, mode, src, minScore, fresh, sort, live]);
 
   const analyzeCaptured = () => {
     if (paste.trim().length < 40) { toast("Paste a fuller job description (40+ characters)", "warn"); return; }
@@ -86,18 +121,69 @@ export function Discover() {
           </select>
         </div>
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-lg border border-mist-300">
+            <button onClick={() => setLive(false)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition-colors ${!live ? "bg-ink-900 text-white" : "bg-white text-mist-600 hover:bg-mist-50"}`}>
+              <Icon name="doc" size={12} />Local board
+            </button>
+            <button onClick={() => setLive(true)}
+              className={`flex items-center gap-1.5 border-l border-mist-300 px-3 py-1.5 text-xs font-semibold transition-colors ${live ? "bg-pine-600 text-white" : "bg-white text-mist-600 hover:bg-mist-50"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${live ? "pulse-dot bg-gold-400" : "bg-mist-400"}`} />
+              Live feed
+            </button>
+          </div>
           {["Posted:", ["Any", 0], ["24h", 1], ["3d", 3], ["7d", 7]].map(([label, v], i) =>
             i === 0 ? <span key="l" className="label-mono">{label as string}</span> : (
               <button key={label as string} onClick={() => setFresh(v as number)}
                 className={`chip border ${fresh === v ? "border-pine-600 bg-pine-600 text-white" : "bg-white"}`}>{label as string}</button>
             )
           )}
-          <span className="ml-auto font-mono text-xs text-mist-500">{list.length} of {scored.length} roles · agent checks {Object.entries(state.settings.sources).filter(([, on]) => on).length} sources {state.settings.scheduleFreq}</span>
+          <span className="ml-auto font-mono text-xs text-mist-500">{list.length} of {live ? scored.filter(({ job }) => job.live).length : scored.length} roles · agent checks {Object.entries(state.settings.sources).filter(([, on]) => on).length} sources {state.settings.scheduleFreq}</span>
         </div>
+        {live && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-dashed border-mist-200 pt-2.5">
+            <span className="label-mono !text-pine-700">Remote boards</span>
+            {(syncInfo ?? []).map((s) => (
+              <span key={s.source} className={`chip border ${s.ok ? "border-pine-200 bg-pine-50 text-pine-800" : "border-clay-100 bg-clay-50 text-clay-700"}`}
+                title={s.error ?? undefined}>
+                <span className={`h-1.5 w-1.5 rounded-full ${s.ok ? "bg-pine-500" : "bg-clay-500"}`} />
+                {s.source} {s.ok ? `· ${s.count} PM roles` : "· unreachable"}
+              </span>
+            ))}
+            {syncState === "busy" && (
+              <span className="chip border border-mist-300 bg-white text-mist-600">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-mist-300 border-t-pine-600" />
+                pulling live postings…
+              </span>
+            )}
+            {state.lastLiveSync && syncState !== "busy" && (
+              <span className="font-mono text-[11px] text-mist-500">
+                synced {new Date(state.lastLiveSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button onClick={() => void sync()} disabled={syncState === "busy"}
+              className="btn btn-ghost !px-2 !py-1 text-xs" aria-label="Sync live feeds now">
+              <Icon name="refresh" size={13} />Sync now
+            </button>
+          </div>
+        )}
       </div>
 
-      {list.length === 0 ? (
-        <EmptyState icon="radar" title="No roles match those filters" sub="Loosen the match threshold or run the agent to pull fresh postings from your sources." />
+      {live && syncState === "busy" && list.length === 0 ? (
+        <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="card p-4"><Shimmer lines={3} /></div>)}</div>
+      ) : live && syncState === "err" && list.length === 0 ? (
+        <div className="card border-clay-100 p-8 text-center">
+          <p className="font-display text-base font-semibold text-clay-700">Couldn't reach the live job boards</p>
+          <p className="mx-auto mt-1.5 max-w-md text-sm text-mist-600">Check your internet connection, or the boards may be rate-limiting. Your local board is unaffected — flip back to it, or retry.</p>
+          <div className="mt-4 flex justify-center gap-2">
+            <Btn variant="primary" icon="refresh" onClick={() => void sync()}>Retry sync</Btn>
+            <Btn variant="ghost" onClick={() => setLive(false)}>Back to local board</Btn>
+          </div>
+        </div>
+      ) : list.length === 0 ? (
+        <EmptyState icon="radar" title={live ? "No live PM roles captured yet" : "No roles match those filters"}
+          sub={live ? "Run a sync, or loosen the filters — live postings are scored against your profile the moment they land." : "Loosen the match threshold or run the agent to pull fresh postings from your sources."}
+          action={live ? <Btn variant="primary" icon="radar" onClick={() => void sync()}>Sync live boards</Btn> : undefined} />
       ) : (
         <div className="space-y-3">
           {list.map(({ job, score }, i) => <JobCard key={job.id} job={job} score={score} index={i} onOpen={(id) => openJob(id)} />)}
