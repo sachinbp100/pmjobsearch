@@ -42,6 +42,7 @@ const PATHS: Record<string, ReactNode> = {
   chevD: (<path d="m6 9.5 6 6 6-6" />),
   chevR: (<path d="m9.5 6 6 6-6 6" />),
   star: (<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z" />),
+  up: (<><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></>),
   chat: (<path d="M4 5h16v11H9l-5 4.5z" />),
   refresh: (<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 3.5V8H15" />),
   flag: (<path d="M5.5 21V4.5S8 3 10.5 4.5 15 6 17.5 4.5V13S15 14.5 12.5 13 8 11.5 5.5 13" />),

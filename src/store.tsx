@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
-  AppState, Application, AppStatus, Job, Letter, Profile, Settings, TailoredResume, Task,
+  AppState, Application, AppStatus, Job, Letter, Profile, ResumeVersion, Settings, TailoredResume, Task,
 } from "./data";
 import { DEFAULT_AI_PROVIDER, iso, seedState, STORAGE_KEY } from "./data";
 
@@ -29,6 +29,9 @@ function load(): AppState {
         jobDetailTab: "overview",
         toasts: [],
       };
+      // migrations for older saved workspaces
+      merged.profile = { ...seedState.profile, ...merged.profile };
+      if (!merged.profile.country) merged.profile = { ...merged.profile, country: "India" };
       return merged;
     }
   } catch { /* fall through to seed */ }
@@ -51,7 +54,9 @@ export interface Api {
   approveLetter: (id: string) => void;
   deleteLetter: (id: string) => void;
   saveTailored: (t: TailoredResume) => void;
-  addResumeVersion: (name: string, note: string, forJobId?: string) => string;
+  addResumeVersion: (name: string, note: string, forJobId?: string, extra?: Partial<ResumeVersion>) => string;
+  updateResumeVersion: (id: string, patch: Partial<ResumeVersion>) => void;
+  removeResumeVersion: (id: string) => void;
   updateProfile: (patch: Partial<Profile>) => void;
   addAchievement: (a: { title: string; detail: string; metrics: string[]; tags: string[] }) => void;
   addTask: (t: Omit<Task, "id" | "done">) => void;
@@ -138,11 +143,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     deleteLetter: (id) => setState((s) => ({ ...s, letters: s.letters.filter((l) => l.id !== id) })),
 
     saveTailored: (t) => setState((s) => ({ ...s, tailored: { ...s.tailored, [t.jobId]: t } })),
-    addResumeVersion: (name, note, forJobId) => {
-      const id = uid("rv");
-      setState((s) => ({ ...s, resumeVersions: [{ id, name, note, updatedAt: iso(0), approved: true, forJobId }, ...s.resumeVersions] }));
+    addResumeVersion: (name, note, forJobId, extra) => {
+      const id = extra?.id ?? uid("rv");
+      setState((s) => ({ ...s, resumeVersions: [{ id, name, note, updatedAt: iso(0), approved: true, forJobId }, ...s.resumeVersions.map((r) => (extra?.primary ? { ...r, primary: false } : r))] }));
       return id;
     },
+    updateResumeVersion: (id, patch) => setState((s) => ({
+      ...s,
+      resumeVersions: s.resumeVersions.map((r) => {
+        if (r.id === id) return { ...r, ...patch };
+        return patch.primary ? { ...r, primary: false } : r;
+      }),
+    })),
+    removeResumeVersion: (id) => setState((s) => ({ ...s, resumeVersions: s.resumeVersions.filter((r) => r.id !== id) })),
 
     updateProfile: (patch) => setState((s) => ({ ...s, profile: { ...s.profile, ...patch } })),
     addAchievement: (a) => setState((s) => ({

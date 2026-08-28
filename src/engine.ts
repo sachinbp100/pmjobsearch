@@ -80,10 +80,13 @@ export function scoreJob(job: Job, p: Profile): JobScore {
 
   let prefs = 40;
   if (titleMatch(p, job)) prefs += 20;
+  const jobLoc = job.location.toLowerCase();
+  const countryOk = !!p.country && jobLoc.includes(p.country.toLowerCase());
   const locOk = job.mode === "Remote"
     ? p.workModes.includes("Remote")
-    : p.preferredLocations.some((l) => job.location.toLowerCase().includes(l.toLowerCase().split(" ")[0])) && p.workModes.includes(job.mode);
+    : (countryOk || p.preferredLocations.some((l) => jobLoc.includes(l.toLowerCase().split(" ")[0]))) && p.workModes.includes(job.mode);
   if (locOk) prefs += 15;
+  if (countryOk && job.mode !== "Remote") prefs += 6; // in-country bonus
   if (p.preferredIndustries.includes(job.industry)) prefs += 10;
   if (p.preferredCompanies.includes(job.company)) prefs += 15;
   if (job.salaryMax && job.salaryMin) {
