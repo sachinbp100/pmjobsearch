@@ -303,7 +303,8 @@ export function JobCard({ job, score, index = 0, onOpen }: { job: Job; score: Jo
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <h3 className="font-display text-[15px] font-semibold text-ink-900 group-hover:text-pine-700 transition-colors">{job.title}</h3>
-            {job.isNew && <Chip tone="pine">NEW</Chip>}
+            {job.isNew && !job.live && <Chip tone="pine">NEW</Chip>}
+            {job.live && <Chip tone="gold"><Icon name="radar" size={10} />LIVE</Chip>}
           </div>
           <p className="mt-0.5 text-[13px] text-mist-600">
             {job.company} · {job.industry}

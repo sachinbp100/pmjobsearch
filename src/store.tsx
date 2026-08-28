@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type {
   AppState, Application, AppStatus, Job, Letter, Profile, Settings, TailoredResume, Task,
 } from "./data";
-import { iso, seedState, STORAGE_KEY } from "./data";
+import { DEFAULT_AI_PROVIDER, iso, seedState, STORAGE_KEY } from "./data";
 
 let toastSeq = 100;
 const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
@@ -13,17 +13,26 @@ function load(): AppState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<AppState>;
-      return {
+      const merged: AppState = {
         ...seedState,
         ...parsed,
+        settings: {
+          ...seedState.settings,
+          ...parsed.settings,
+          sources: { ...seedState.settings.sources, ...parsed.settings?.sources },
+          notifications: { ...seedState.settings.notifications, ...parsed.settings?.notifications },
+          integrations: { ...seedState.settings.integrations, ...parsed.settings?.integrations },
+          aiProvider: { ...DEFAULT_AI_PROVIDER, ...parsed.settings?.aiProvider },
+        },
         tab: "dashboard",
         jobDetailId: null,
         jobDetailTab: "overview",
         toasts: [],
-      } as AppState;
+      };
+      return merged;
     }
   } catch { /* fall through to seed */ }
-  return { ...seedState };
+  return { ...seedState, settings: { ...seedState.settings, aiProvider: { ...DEFAULT_AI_PROVIDER } } };
 }
 
 export interface Api {
@@ -49,6 +58,7 @@ export interface Api {
   toggleTask: (id: string) => void;
   removeTask: (id: string) => void;
   agentFinish: (found: Job[], logLines: string[]) => void;
+  ingestLiveJobs: (jobs: Job[]) => { added: number; dupes: number };
   actInbox: (id: string, alsoStatus?: { appId: string; status: AppStatus }) => void;
   updateSettings: (patch: Partial<Settings>) => void;
   toggleWatch: (company: string) => void;
@@ -160,6 +170,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         tasks: [...newTasks, ...s.tasks],
       };
     }),
+
+    ingestLiveJobs: (jobs) => {
+      const s = stateRef.current;
+      const key = (j: Job) => `${j.company.toLowerCase()}::${j.title.toLowerCase()}`;
+      const existing = new Set(s.jobs.map(key));
+      const fresh = jobs.filter((j) => !existing.has(key(j))).map((j) => ({ ...j, live: true, isNew: true }));
+      if (fresh.length > 0) {
+        setState((st) => ({
+          ...st,
+          jobs: [...fresh, ...st.jobs],
+          lastLiveSync: new Date().toISOString(),
+          agentLog: [
+            { id: uid("log"), at: new Date().toISOString().slice(0, 16), text: `Live sync — ${fresh.length} new posting${fresh.length === 1 ? "" : "s"} pulled from remote job boards.`, kind: "system" as const },
+            ...st.agentLog,
+          ].slice(0, 24),
+        }));
+      } else {
+        setState((st) => ({ ...st, lastLiveSync: new Date().toISOString() }));
+      }
+      return { added: fresh.length, dupes: jobs.length - fresh.length };
+    },
 
     actInbox: (id, alsoStatus) => setState((s) => ({
       ...s,

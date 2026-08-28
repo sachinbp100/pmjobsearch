@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Job } from "./data";
 import { scoreJob } from "./engine";
+import { fetchLiveJobs } from "./live";
 import { StoreProvider, useApp } from "./store";
 import JobDetail from "./JobDetail";
 import Dashboard from "./pages/Dashboard";
@@ -167,7 +168,7 @@ function Shell() {
 
 // ─── daily agent modal ───────────────────────────────────────────────────────
 const AGENT_STEPS = [
-  "Searching connected sources (LinkedIn, careers pages, recruiter mail)…",
+  "Fetching live remote boards (Remotive, Arbeitnow) + connected sources…",
   "Filtering by your titles, locations, modes and salary band…",
   "Removing duplicates against your tracker…",
   "Scoring every posting against your verified profile…",
@@ -175,7 +176,7 @@ const AGENT_STEPS = [
 ];
 
 function AgentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { state, agentFinish, setTab } = useApp();
+  const { state, agentFinish, setTab, ingestLiveJobs } = useApp();
   const [phase, setPhase] = useState<"idle" | "run" | "done">("idle");
   const [step, setStep] = useState(0);
   const [found, setFound] = useState<{ job: Job; score: number; reason: string }[]>([]);
@@ -187,26 +188,41 @@ function AgentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
     setPhase("run"); setStep(0);
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const delay = reduce ? 40 : 620;
-    const pool = state.reserveJobs.slice(0, 3);
+    const so = state.settings.sources;
+    const liveOn = so.Remotive !== false || so.Arbeitnow !== false;
+
+    // real internet fetch — runs in parallel with the staged animation
+    const livePromise: Promise<Job[]> = liveOn
+      ? fetchLiveJobs({ remotive: so.Remotive !== false, arbeitnow: so.Arbeitnow !== false })
+          .then((r) => r.jobs)
+          .catch(() => [] as Job[])
+      : Promise.resolve([]);
+
     AGENT_STEPS.forEach((_, i) => {
       timers.current.push(window.setTimeout(() => setStep(i), i * delay));
     });
-    timers.current.push(window.setTimeout(() => {
+    const minWait = new Promise<void>((res) => {
+      timers.current.push(window.setTimeout(res, AGENT_STEPS.length * delay + 200));
+    });
+
+    void Promise.all([minWait, livePromise]).then(([, liveJobs]) => {
+      const ingested = liveJobs.length > 0 ? ingestLiveJobs(liveJobs) : { added: 0, dupes: 0 };
+      const pool = [...liveJobs, ...state.reserveJobs.slice(0, Math.max(0, 3 - liveJobs.length))].slice(0, 8);
       const scored = pool.map((job) => {
         const sc = scoreJob(job, state.profile);
         return { job, score: sc.overall, reason: sc.reason };
       }).sort((a, b) => b.score - a.score);
       if (pool.length > 0) {
         agentFinish(pool, [
-          `Agent run completed — scanned ${40 + Math.floor(Math.random() * 30)} postings; ${pool.length} new matches added, duplicates removed.`,
+          `Agent run completed — live boards returned ${liveJobs.length} posting${liveJobs.length === 1 ? "" : "s"} (${ingested.dupes} duplicate${ingested.dupes === 1 ? "" : "s"} removed); ${pool.length} roles scored and prioritized.`,
           ...scored.filter((x) => x.score >= state.settings.minScoreToAlert).map((x) => `High-priority alert: ${x.job.title} — ${x.job.company} (${x.score}%).`),
         ]);
       } else {
-        agentFinish([], [`Agent run completed — no new postings above your ${state.settings.minScoreToAlert}% bar; top existing matches re-ranked.`]);
+        agentFinish([], [`Agent run completed — live boards reachable but nothing new above your ${state.settings.minScoreToAlert}% bar; existing matches re-ranked.`]);
       }
       setFound(scored);
       setPhase("done");
-    }, AGENT_STEPS.length * delay + 200));
+    });
   };
 
   return (

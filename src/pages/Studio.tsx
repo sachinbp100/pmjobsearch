@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import type { Letter, Tone } from "../data";
 import { TONES, fmtDate, iso } from "../data";
-import { coverLetter, scoreJob, tailorResume } from "../engine";
+import { scoreJob, tailorResume } from "../engine";
 import type { LetterOutput } from "../engine";
+import { liveProviderActive, smartLetter } from "../live";
 import { useApp } from "../store";
 import { Btn, Chip, CopyBtn, EmptyState, Icon, SectionHead, Shimmer, Tabs, useFakeAI } from "../ui";
 
@@ -142,7 +143,7 @@ export function CoverLetters() {
   const [selId, setSelId] = useState<string | null>(state.letters[0]?.id ?? null);
   const [newJobId, setNewJobId] = useState(state.jobs[0]?.id ?? "");
   const [newTone, setNewTone] = useState<Tone>("Professional");
-  const [draft, setDraft] = useState<LetterOutput | null>(null);
+  const [draft, setDraft] = useState<(LetterOutput & { viaLive?: boolean }) | null>(null);
   const ai = useFakeAI();
   const sel = state.letters.find((l) => l.id === selId) ?? null;
   const [editText, setEditText] = useState(sel?.text ?? "");
@@ -153,9 +154,20 @@ export function CoverLetters() {
   const generate = () => {
     const job = jobOf(newJobId);
     if (!job) return;
+    const prov = state.settings.aiProvider;
+    const viaLiveWillBe = liveProviderActive(prov);
     ai.run(
-      ["Pulling verified achievements…", `Writing in "${newTone}" voice…`, "Validating every claim against your profile…"],
-      () => { setDraft(coverLetter(job, p, newTone)); setSelId(null); toast("All claims validated"); }
+      viaLiveWillBe
+        ? ["Sending verified facts to your live AI…", `Writing in "${newTone}" voice…`, "Checking the response against your profile…"]
+        : ["Pulling verified achievements…", `Writing in "${newTone}" voice…`, "Validating every claim against your profile…"],
+      () => {
+        void smartLetter(job, p, newTone, prov).then(({ out, viaLive, error }) => {
+          setDraft({ ...out, viaLive });
+          setSelId(null);
+          if (error) toast(`Live AI failed — local grounding engine used instead`, "warn");
+          else toast(viaLive ? "Live AI draft ready — grounded in verified facts" : "All claims validated");
+        });
+      }
     );
   };
 
@@ -206,13 +218,16 @@ export function CoverLetters() {
             <div className="card anim-fade-up p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-display text-base font-semibold text-ink-900">New draft — {newTone} · {jobOf(newJobId)?.company}</h3>
-                <span className="font-mono text-xs text-mist-500">{draft.text.split(/\s+/).length} words</span>
+                <span className="flex items-center gap-2 font-mono text-xs text-mist-500">
+                  {draft.viaLive && <Chip tone="gold"><Icon name="zap" size={11} />live AI</Chip>}
+                  {draft.text.split(/\s+/).length} words
+                </span>
               </div>
               <textarea className="textarea mt-3 min-h-[320px] text-[13.5px] leading-relaxed" value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
               <div className="mt-3 rounded-lg border border-pine-200 bg-pine-50/60 p-3">
                 <p className="flex items-center gap-1.5 text-[13px] font-semibold text-pine-800"><Icon name="shield" size={15} />Claim validation</p>
                 <ul className="mt-1.5 space-y-1">
-                  {draft.claims.map((c) => <li key={c.claim} className="flex gap-1.5 text-xs text-ink-700"><span className="text-pine-600"><Icon name="check" size={12} /></span>{c.claim} <span className="text-mist-500">— {c.source}</span></li>)}
+                  {draft.claims.map((c) => <li key={c.claim} className="flex gap-1.5 text-xs text-ink-700"><span className={c.verified ? "text-pine-600" : "text-gold-600"}><Icon name={c.verified ? "check" : "alert"} size={12} /></span>{c.claim} <span className="text-mist-500">— {c.source}</span></li>)}
                 </ul>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">

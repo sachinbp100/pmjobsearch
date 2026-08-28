@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { TaskType } from "../data";
-import { daysUntil, fmtDate } from "../data";
+import { DEFAULT_AI_PROVIDER, daysUntil, fmtDate } from "../data";
+import { fetchLiveJobs, testProvider } from "../live";
 import { useApp } from "../store";
 import { Btn, Chip, EmptyState, Icon, Modal, SectionHead, Toggle } from "../ui";
 
@@ -92,10 +93,41 @@ export function TasksPage() {
 
 // ─── SETTINGS & INTEGRATIONS ────────────────────────────────────────────────
 export function SettingsPage() {
-  const { state, updateSettings, toast, resetAll } = useApp();
+  const { state, updateSettings, toast, resetAll, ingestLiveJobs } = useApp();
   const s = state.settings;
   const [confirmReset, setConfirmReset] = useState(false);
   const [runNow, setRunNow] = useState(false);
+  const prov = s.aiProvider ?? DEFAULT_AI_PROVIDER;
+  const [testState, setTestState] = useState<"idle" | "busy" | "ok" | "err">("idle");
+  const [testMsg, setTestMsg] = useState("");
+  const [syncBusy, setSyncBusy] = useState(false);
+  const setProv = (patch: Partial<typeof prov>) => updateSettings({ aiProvider: { ...prov, ...patch } });
+
+  const runLiveSync = async () => {
+    setSyncBusy(true);
+    const { jobs, statuses } = await fetchLiveJobs({ remotive: s.sources.Remotive !== false, arbeitnow: s.sources.Arbeitnow !== false });
+    const { added, dupes } = ingestLiveJobs(jobs);
+    setSyncBusy(false);
+    const okCount = statuses.filter((x) => x.ok).length;
+    toast(
+      okCount === 0
+        ? "Live boards unreachable — check your connection"
+        : `Synced ${okCount} board${okCount === 1 ? "" : "s"} — ${added} new, ${dupes} duplicate${dupes === 1 ? "" : "s"} skipped`,
+      okCount === 0 ? "err" : "ok"
+    );
+  };
+
+  const runTest = async () => {
+    setTestState("busy"); setTestMsg("");
+    try {
+      const msg = await testProvider(prov);
+      setTestState("ok"); setTestMsg(msg);
+      toast("AI provider connected");
+    } catch (e: any) {
+      setTestState("err"); setTestMsg(e?.message ?? "Connection failed");
+      toast("Provider test failed", "err");
+    }
+  };
 
   const INTEGRATIONS: { key: "gmail" | "linkedin" | "calendar" | "browser"; name: string; desc: string; icon: string }[] = [
     { key: "gmail", name: "Gmail", desc: "Classifies recruiter mail, interview invites and rejections.", icon: "mail" },
@@ -149,6 +181,84 @@ export function SettingsPage() {
           </div>
           <Btn variant="ink" icon="radar" className="mt-4" onClick={() => { setRunNow(true); window.setTimeout(() => setRunNow(false), 900); toast("Agent queued — open “Find My Next Best Job” to watch it run"); }}>Run agent now</Btn>
           {runNow && <p className="caret mt-2 font-mono text-xs text-pine-700">contacting sources</p>}
+        </section>
+
+        {/* live job feeds */}
+        <section className="card p-5">
+          <h3 className="flex items-center gap-2 font-display text-base font-semibold text-ink-900"><span className="text-pine-600"><Icon name="radar" size={17} /></span>Live job feeds</h3>
+          <p className="mt-2 text-[13px] leading-relaxed text-mist-600">
+            Real postings are pulled over the internet from public job-board APIs — no key required. Toggle them above under <b>Connected sources</b> (Remotive, Arbeitnow); fetched roles are deduplicated, scored against your profile, and marked <Chip tone="gold">LIVE</Chip>.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-mist-200 bg-mist-50 p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-ink-800">Last sync</p>
+              <p className="font-mono text-xs text-mist-600">
+                {state.lastLiveSync
+                  ? new Date(state.lastLiveSync).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                  : "never — run one now"}
+              </p>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-ink-800">Live roles in board</p>
+              <p className="font-mono text-xs text-mist-600">{state.jobs.filter((j) => j.live).length} postings</p>
+            </div>
+            <Btn variant="ink" icon="refresh" disabled={syncBusy} onClick={() => void runLiveSync()}>
+              {syncBusy ? "Syncing…" : "Sync now"}
+            </Btn>
+          </div>
+          {syncBusy && (
+            <p className="caret mt-2.5 font-mono text-xs text-pine-700">GET remotive.com/api/remote-jobs · arbeitnow.com/api/job-board-api</p>
+          )}
+        </section>
+
+        {/* AI provider */}
+        <section className="card p-5">
+          <h3 className="flex items-center gap-2 font-display text-base font-semibold text-ink-900"><span className="text-pine-600"><Icon name="wand" size={17} /></span>AI provider (live generation)</h3>
+          <p className="mt-2 text-[13px] leading-relaxed text-mist-600">
+            By default, letters are drafted by the on-device grounding engine — offline and deterministic. Connect your own LLM key to have cover letters written live. Every prompt is wrapped in the <b>Verified Career Facts</b> guardrail: the model may only use your approved profile data.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <p className="label-mono mb-1">Engine</p>
+              <select className="select" value={prov.kind} onChange={(e) => setProv({ kind: e.target.value as typeof prov.kind })}>
+                <option value="local">Local grounding engine (offline, recommended default)</option>
+                <option value="openai">OpenAI-compatible API (OpenAI, Groq, OpenRouter, local LLM…)</option>
+                <option value="anthropic">Anthropic API</option>
+              </select>
+            </div>
+            {prov.kind !== "local" && (
+              <>
+                <div>
+                  <p className="label-mono mb-1">Base URL</p>
+                  <input className="input font-mono text-xs" value={prov.baseUrl} onChange={(e) => setProv({ baseUrl: e.target.value })}
+                    placeholder={prov.kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"} />
+                </div>
+                <div>
+                  <p className="label-mono mb-1">Model</p>
+                  <input className="input font-mono text-xs" value={prov.model} onChange={(e) => setProv({ model: e.target.value })}
+                    placeholder={prov.kind === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o-mini"} />
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="label-mono mb-1">API key</p>
+                  <input type="password" className="input font-mono text-xs" value={prov.apiKey} onChange={(e) => setProv({ apiKey: e.target.value })}
+                    placeholder="sk-… (stored only in this browser, sent only to the provider above)" />
+                </div>
+                <div className="flex items-center gap-2 sm:col-span-2">
+                  <Btn variant="ink" icon="zap" disabled={testState === "busy" || prov.apiKey.trim().length < 8} onClick={() => void runTest()}>
+                    {testState === "busy" ? "Testing…" : "Test connection"}
+                  </Btn>
+                  {testState === "ok" && <span className="flex items-center gap-1.5 text-xs font-semibold text-pine-700"><Icon name="check" size={13} />{testMsg}</span>}
+                  {testState === "err" && <span className="flex items-center gap-1.5 text-xs font-semibold text-clay-600"><Icon name="alert" size={13} />{testMsg}</span>}
+                </div>
+              </>
+            )}
+          </div>
+          {prov.kind !== "local" && (
+            <p className="mt-3 flex items-start gap-2 rounded-md border border-gold-100 bg-gold-50 p-2.5 text-[11.5px] leading-relaxed text-ink-700">
+              <Icon name="shield" size={14} className="mt-0.5 shrink-0 text-gold-600" />
+              For production-wide use, route requests through a small proxy (Cloudflare Worker / serverless function) so keys never live in the browser. Anthropic direct browser calls are enabled via its official CORS header.
+            </p>
+          )}
         </section>
 
         {/* integrations */}

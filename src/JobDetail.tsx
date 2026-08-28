@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AnswerLength, AppQuestion, LetterOutput, OutreachKind } from "./engine";
-import { answerQuestion, APP_QUESTIONS, analyzeJob, coverLetter, outreach, scoreJob, tailorResume } from "./engine";
+import { answerQuestion, APP_QUESTIONS, analyzeJob, outreach, scoreJob, tailorResume } from "./engine";
+import { liveProviderActive, smartLetter } from "./live";
 import type { AppStatus, Tone } from "./data";
 import { TONES, fmtDate, fmtMoney, iso } from "./data";
 import { useApp } from "./store";
@@ -43,7 +44,8 @@ function DetailInner({ jobId, tab, setTab, onClose }: { jobId: string; tab: stri
 
   // letter tab state
   const [tone, setTone] = useState<Tone>("Professional");
-  const [draft, setDraft] = useState<LetterOutput | null>(null);
+  const [draft, setDraft] = useState<(LetterOutput & { viaLive?: boolean }) | null>(null);
+  const [letterPending, setLetterPending] = useState(false);
   const letterAI = useFakeAI();
 
   // outreach state
@@ -360,11 +362,28 @@ function DetailInner({ jobId, tab, setTab, onClose }: { jobId: string; tab: stri
                     {tone === "Technical PM" && "Leads with platforms, APIs, cloud and technical judgment."}
                     {tone === "Recruiter Short" && "A compact message for LinkedIn or email — ~90 words."}
                   </p>
-                  <Btn variant="primary" icon="pen" disabled={letterAI.busy} onClick={() => letterAI.run(
-                    ["Pulling verified achievements…", `Writing in "${tone}" voice…`, "Validating every claim against your profile…"],
-                    () => { setDraft(coverLetter(job, profile, tone, company ? `What ${job.company} is building — ${company.overview.split(".")[0].toLowerCase()} — is exactly the kind of platform problem I like to own.` : undefined)); toast("All claims validated against your career profile"); }
-                  )}>
-                    {letterAI.busy ? letterAI.stage : "Generate cover letter"}
+                  <Btn variant="primary" icon="pen" disabled={letterAI.busy || letterPending} onClick={() => {
+                    const prov = state.settings.aiProvider;
+                    const useLive = liveProviderActive(prov);
+                    setLetterPending(true);
+                    letterAI.run(
+                      useLive
+                        ? ["Sending verified facts to your live AI…", `Writing in "${tone}" voice…`, "Checking the response against your profile…"]
+                        : ["Pulling verified achievements…", `Writing in "${tone}" voice…`, "Validating every claim against your profile…"],
+                      () => {
+                        void smartLetter(job, profile, tone, prov, company ? `What ${job.company} is building — ${company.overview.split(".")[0].toLowerCase()} — is exactly the kind of platform problem I like to own.` : undefined)
+                          .then(({ out, viaLive, error }) => {
+                            setDraft({ ...out, viaLive });
+                            setLetterPending(false);
+                            toast(
+                              error ? "Live AI failed — local grounding engine used instead" : viaLive ? "Live AI draft ready — grounded in verified facts" : "All claims validated against your career profile",
+                              error ? "warn" : "ok"
+                            );
+                          });
+                      }
+                    );
+                  }}>
+                    {letterAI.busy || letterPending ? (letterAI.busy ? letterAI.stage : "Live AI writing…") : liveProviderActive(state.settings.aiProvider) ? "Generate with live AI" : "Generate cover letter"}
                   </Btn>
                   {letterAI.busy && <div className="mt-4"><Shimmer lines={8} /></div>}
                 </div>
@@ -373,7 +392,10 @@ function DetailInner({ jobId, tab, setTab, onClose }: { jobId: string; tab: stri
                   <section className="card p-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="font-display text-base font-semibold text-ink-900">Draft — {tone}</h4>
-                      <span className="font-mono text-xs text-mist-500">{draft.text.split(/\s+/).length} words {tone !== "Recruiter Short" && draft.text.split(/\s+/).length <= 400 && "· within 250–400 target"}</span>
+                      <span className="flex items-center gap-2 font-mono text-xs text-mist-500">
+                        {draft.viaLive && <Chip tone="gold"><Icon name="zap" size={11} />live AI</Chip>}
+                        {draft.text.split(/\s+/).length} words {tone !== "Recruiter Short" && draft.text.split(/\s+/).length <= 400 && "· within 250–400 target"}
+                      </span>
                     </div>
                     <textarea className="textarea mt-2.5 min-h-[300px] font-body text-[13.5px] leading-relaxed" value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
                   </section>
@@ -382,7 +404,7 @@ function DetailInner({ jobId, tab, setTab, onClose }: { jobId: string; tab: stri
                     <ul className="mt-2.5 space-y-1.5">
                       {draft.claims.map((c) => (
                         <li key={c.claim} className="flex items-start gap-2 text-[12.5px]">
-                          <span className="mt-0.5 text-pine-600"><Icon name="check" size={13} /></span>
+                          <span className={`mt-0.5 ${c.verified ? "text-pine-600" : "text-gold-600"}`}><Icon name={c.verified ? "check" : "alert"} size={13} /></span>
                           <span className="text-ink-700"><b>{c.claim}</b> <span className="text-mist-500">— source: {c.source}</span></span>
                         </li>
                       ))}
