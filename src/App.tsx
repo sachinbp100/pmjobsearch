@@ -12,10 +12,11 @@ import Outreach from "./pages/Outreach";
 import { Companies, InterviewPrep } from "./pages/Prep";
 import { CareerProfile, Networking } from "./pages/ProfileNet";
 import { SettingsPage, TasksPage } from "./pages/TasksSettings";
+import GuidePage from "./pages/Guide";
 import { Btn, Icon, Modal, Monogram, RecBadge, ScoreRing, ToastHost } from "./ui";
 
 const NAV: { group: string; items: { id: string; label: string; icon: string }[] }[] = [
-  { group: "Overview", items: [{ id: "dashboard", label: "Dashboard", icon: "compass" }] },
+  { group: "Overview", items: [{ id: "dashboard", label: "Dashboard", icon: "compass" }, { id: "guide", label: "Guide", icon: "book" }] },
   {
     group: "Discover",
     items: [
@@ -55,6 +56,18 @@ const TITLES: Record<string, string> = Object.fromEntries(NAV.flatMap((g) => g.i
 function Shell() {
   const { state, setTab } = useApp();
   const [agentOpen, setAgentOpen] = useState(false);
+
+  // global shortcut: J opens the daily agent (skipped while typing)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "j" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      setAgentOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const dueTasks = state.tasks.filter((t) => !t.done && t.due <= new Date().toISOString().slice(0, 10)).length;
   const pendingInbox = state.inbox.filter((m) => !m.acted).length;
   const activeApps = state.applications.filter((a) => !["Rejected", "Closed", "Offer"].includes(a.status)).length;
@@ -122,6 +135,11 @@ function Shell() {
               {state.settings.integrations.linkedin && <span className="chip border border-mist-300 bg-white"><span className="pulse-dot h-1.5 w-1.5 rounded-full bg-pine-500" />LinkedIn</span>}
               <span className="chip border border-mist-300 bg-white font-mono text-mist-600"><Icon name="clock" size={11} />agent {state.settings.scheduleFreq} · {state.settings.scheduleTime}</span>
             </div>
+            <button onClick={() => setTab("guide")} title="How to use Waypoint (Guide)"
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${state.tab === "guide" ? "border-pine-600 bg-pine-50 text-pine-700" : "border-mist-300 bg-white text-ink-500 hover:border-pine-400 hover:text-pine-700"}`}
+              aria-label="Open guide">
+              <Icon name="help" size={18} />
+            </button>
             <button onClick={() => setAgentOpen(true)}
               className="btn btn-primary !rounded-lg px-4 py-2 text-sm shadow-md shadow-pine-600/25">
               <Icon name="radar" size={16} className="text-pine-200" />
@@ -142,6 +160,7 @@ function Shell() {
         <main className="workspace-bg flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1360px] px-4 py-6 sm:px-6">
             {state.tab === "dashboard" && <Dashboard onRunAgent={() => setAgentOpen(true)} />}
+            {state.tab === "guide" && <GuidePage onRunAgent={() => setAgentOpen(true)} />}
             {state.tab === "discover" && <Discover />}
             {state.tab === "matches" && <Matches />}
             {state.tab === "saved" && <Saved />}
